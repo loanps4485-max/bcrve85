@@ -172,6 +172,12 @@ const defaultProducts = [
   {id:6,name:"Grand format",category:"Packs",emoji:"◈",price:29.90,unit:"1 pack"}
 ];
 
+const defaultCategories = ["Sélection","Nouveautés","Packs"];
+const NETLIFY_SYNC_URL = "/.netlify/functions/shop-data";
+let categories = JSON.parse(localStorage.getItem("bcrve85_categories") || "null") || [...defaultCategories];
+let syncTimer = null;
+let lastSyncOk = false;
+
 let products = JSON.parse(localStorage.getItem("bcrve85_products") || "null") || defaultProducts;
 let cart = JSON.parse(localStorage.getItem("bcrve85_cart") || "{}");
 let orders = JSON.parse(localStorage.getItem("bcrve85_orders") || "[]");
@@ -184,13 +190,52 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const money = n => n.toLocaleString("fr-FR",{style:"currency",currency:"EUR"});
 
-function save(){
+function save({sync=true}={}){
   localStorage.setItem("bcrve85_categories", JSON.stringify(categories));
   localStorage.setItem("bcrve85_cart", JSON.stringify(cart));
   localStorage.setItem("bcrve85_products", JSON.stringify(products));
   localStorage.setItem("bcrve85_orders", JSON.stringify(orders));
   updateCartCount();
   renderAdmin();
+  if(sync) queueNetlifySync();
+}
+
+function queueNetlifySync(){
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(syncToNetlify, 350);
+}
+
+async function syncToNetlify(){
+  try{
+    const adminKey=localStorage.getItem("bcrve85_admin_key") || prompt("Clé admin Netlify (une seule fois sur cet appareil) :");
+    if(!adminKey) return;
+    localStorage.setItem("bcrve85_admin_key",adminKey);
+    const r=await fetch(NETLIFY_SYNC_URL,{
+      method:"POST",headers:{"Content-Type":"application/json","X-Admin-Key":adminKey},
+      body:JSON.stringify({categories,products})
+    });
+    if(!r.ok) throw new Error("sync "+r.status);
+    lastSyncOk=true;
+    toast("Synchronisé avec Netlify ✨");
+  }catch(e){
+    lastSyncOk=false;
+    console.warn("Netlify sync impossible",e);
+  }
+}
+
+async function loadFromNetlify(){
+  try{
+    const r=await fetch(NETLIFY_SYNC_URL,{cache:"no-store"});
+    if(!r.ok) return false;
+    const data=await r.json();
+    if(Array.isArray(data.categories) && data.categories.length) categories=data.categories;
+    if(Array.isArray(data.products)) products=data.products;
+    save({sync:false});
+    return true;
+  }catch(e){
+    console.warn("Netlify data unavailable",e);
+    return false;
+  }
 }
 function cartCount(){ return Object.values(cart).reduce((a,b)=>a+b,0); }
 function cartTotal(){ return Object.entries(cart).reduce((sum,[id,q])=>sum+(products.find(p=>p.id==id)?.price||0)*q,0); }
@@ -351,7 +396,10 @@ $("#orderForm").addEventListener("submit",e=>{
   cart={};save();$("#orderForm").reset();showPage("home");
 });
 
-renderChips();renderProducts();updateCartCount();renderAllAdmin();renderProfile();
+(async()=>{
+  await loadFromNetlify();
+  renderChips();renderProducts();updateCartCount();renderAllAdmin();renderProfile();
+})();
 
 </script>
 </body>
